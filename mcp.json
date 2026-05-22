@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "sentinel-x": {
+      "command": "node",
+      "args": [
+        "server.js"
+      ],
+      "cwd": "C:/Users/Nack/mcp01/sentinel-x",
+      "env": {
+        "MCP_ROOT": "C:/Users/Nack/mcp01/sentinel-x"
+      }
+    }
+  }
+}

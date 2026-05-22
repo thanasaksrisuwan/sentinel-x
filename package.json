@@ -1,0 +1,16 @@
+{
+  "name": "sentinel-x",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "mssql": "^12.5.4",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1",
+    "yaml": "^2.7.0"
+  }
+}
