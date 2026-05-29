@@ -8,6 +8,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "cheerio": "^1.2.0",
+    "chokidar": "^5.0.0",
     "yaml": "^2.7.0"
   },
   "peerDependencies": {

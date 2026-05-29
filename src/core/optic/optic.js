@@ -1,9 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
+import * as cheerio from "cheerio";
 
 /**
  * Sentinel-X Optic Nerve
- * Visual Sensory & Web Perception (Lightweight)
+ * Visual Sensory & Web Perception (Robust via Cheerio)
  */
 export class OpticEngine {
 	constructor(deps) {
@@ -12,10 +13,9 @@ export class OpticEngine {
 
 	async fetchUrlText(url) {
 		try {
-			// Using native fetch
 			const res = await fetch(url, {
 				headers: {
-					'User-Agent': 'Sentinel-X Optic Engine/1.0',
+					'User-Agent': 'Sentinel-X Optic Engine/2.0 (Cheerio-powered)',
 					'Accept': 'text/html,application/xhtml+xml,application/xml'
 				}
 			});
@@ -29,42 +29,35 @@ export class OpticEngine {
 				return { error: `Unsupported content type: ${contentType}` };
 			}
 
-			let html = await res.text();
+			const html = await res.text();
 			
-			// Extremely lightweight HTML stripping (No Cheerio/Puppeteer required)
-			// Remove scripts and styles
-			html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
-			html = html.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "");
+			// Use proper AST parser (Cheerio) instead of regex
+			const $ = cheerio.load(html);
 			
-			// Extract title
-			const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
-			const title = titleMatch ? titleMatch[1].trim() : "No Title";
-
-			// Extract headings (h1, h2, h3)
+			// Remove scripts, styles, and invisible elements
+			$('script, style, noscript, iframe, svg, canvas').remove();
+			
+			const title = $('title').text().trim() || "No Title";
+			
 			const headings = [];
-			const headingRegex = /<(h[1-3])[^>]*>(.*?)<\/\1>/gi;
-			let match;
-			while ((match = headingRegex.exec(html)) !== null) {
-				const tag = match[1].toLowerCase();
-				const text = match[2].replace(/<[^>]+>/g, "").trim();
-				if (text) headings.push(`${tag.toUpperCase()}: ${text}`);
-			}
+			$('h1, h2, h3').each((_, el) => {
+				const tag = el.tagName.toUpperCase();
+				const text = $(el).text().trim();
+				if (text) headings.push(`${tag}: ${text}`);
+			});
 
-			// Clean up text content
-			let textContent = html
-				.replace(/<[^>]+>/g, " ") // Remove all remaining tags
-				.replace(/&nbsp;/g, " ") // Decode space
-				.replace(/\s+/g, " ") // Condense whitespace
+			// Clean up text content properly
+			let textContent = $('body').text()
+				.replace(/\s+/g, " ")
 				.trim();
 				
-			// Truncate to avoid massive payloads
 			if (textContent.length > 5000) {
 				textContent = textContent.slice(0, 5000) + "... [Truncated]";
 			}
 
 			return {
 				title,
-				headings: headings.slice(0, 20), // Top 20 headings
+				headings: headings.slice(0, 20),
 				content_preview: textContent,
 				source_url: url
 			};
@@ -80,7 +73,6 @@ export class OpticEngine {
 		
 		try {
 			const entries = await fs.readdir(dir, { withFileTypes: true });
-			// Sort dirs first, then files
 			entries.sort((a, b) => {
 				if (a.isDirectory() && !b.isDirectory()) return -1;
 				if (!a.isDirectory() && b.isDirectory()) return 1;

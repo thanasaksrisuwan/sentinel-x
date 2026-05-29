@@ -1,20 +1,70 @@
 import fs from "fs/promises";
 import path from "path";
+import chokidar from "chokidar";
 
 /**
  * Sentinel-X Pulse System
- * Heartbeat & Proactive Workspace Scanning
+ * Event-Driven Proactive Workspace Scanning
  */
 export class PulseEngine {
 	constructor(deps) {
 		this.deps = deps;
 		this.lastCheck = new Date();
 		this.watchList = new Set();
+		this.recentChanges = [];
+		this.watcher = null;
+		
+		this.initWatcher();
+	}
+
+	initWatcher() {
+		// Event-driven watcher using Chokidar
+		this.watcher = chokidar.watch(this.deps.ROOT_DIR, {
+			ignored: [
+				/(^|[\/\\])\../, // ignore dotfiles
+				'**/node_modules/**',
+				'**/vendor/**'
+			],
+			persistent: true,
+			ignoreInitial: true,
+			depth: 5
+		});
+
+		this.watcher.on('all', (event, filePath) => {
+			// Record recent changes passively
+			const relPath = path.relative(this.deps.ROOT_DIR, filePath);
+			
+			// If watchList has patterns, only record if matches (or if empty, record all)
+			let shouldRecord = this.watchList.size === 0;
+			if (!shouldRecord) {
+				for (const pattern of this.watchList) {
+					if (relPath.includes(pattern)) {
+						shouldRecord = true;
+						break;
+					}
+				}
+			}
+
+			if (shouldRecord) {
+				this.recentChanges.push({
+					event,
+					file: relPath,
+					time: new Date().toISOString()
+				});
+				
+				// Cap size
+				if (this.recentChanges.length > 100) {
+					this.recentChanges.shift();
+				}
+			}
+		});
 	}
 
 	async checkPulse() {
 		const now = new Date();
-		const changes = await this.scanRecentChanges(this.deps.ROOT_DIR, this.lastCheck);
+		// Fetch changes accumulated via events instead of brute force scanning
+		const changes = [...this.recentChanges];
+		this.recentChanges = []; // clear after reading
 		this.lastCheck = now;
 		
 		const health = await this.checkHealth();
@@ -29,37 +79,6 @@ export class PulseEngine {
 	addWatch(pattern) {
 		this.watchList.add(pattern);
 		return [...this.watchList];
-	}
-
-	async scanRecentChanges(dir, sinceTime, results = []) {
-		if (results.length > 50) return results; // Cap to avoid massive scans
-
-		try {
-			const entries = await fs.readdir(dir, { withFileTypes: true });
-			for (const entry of entries) {
-				const fullPath = path.join(dir, entry.name);
-				
-				// Ignore hidden/system dirs
-				if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "vendor") {
-					continue;
-				}
-
-				if (entry.isDirectory()) {
-					await this.scanRecentChanges(fullPath, sinceTime, results);
-				} else {
-					const stats = await fs.stat(fullPath);
-					if (stats.mtime > sinceTime) {
-						results.push({
-							file: path.relative(this.deps.ROOT_DIR, fullPath),
-							modified: stats.mtime.toISOString(),
-							size: stats.size
-						});
-					}
-				}
-			}
-		} catch (e) { /* ignore access errors */ }
-		
-		return results;
 	}
 
 	async checkHealth() {
@@ -86,5 +105,11 @@ export class PulseEngine {
 			status: alerts.length > 0 ? "warning" : "healthy",
 			alerts
 		};
+	}
+	
+	async close() {
+		if (this.watcher) {
+			await this.watcher.close();
+		}
 	}
 }
