@@ -1,4 +1,3 @@
-import mysql from "mysql2/promise";
 import { DatabaseAdapter } from "./adapter.js";
 
 /**
@@ -6,6 +5,7 @@ import { DatabaseAdapter } from "./adapter.js";
  */
 export class MysqlAdapter extends DatabaseAdapter {
 	async connect() {
+		const mysql = (await import("mysql2/promise")).default;
 		// Use createPool for better connection management
 		this.pool = mysql.createPool({
 			host: this.config.server || this.config.host,

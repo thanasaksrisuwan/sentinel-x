@@ -1,4 +1,3 @@
-import sql from "mssql";
 import { DatabaseAdapter } from "./adapter.js";
 
 /**
@@ -6,6 +5,7 @@ import { DatabaseAdapter } from "./adapter.js";
  */
 export class MssqlAdapter extends DatabaseAdapter {
 	async connect() {
+		const sql = (await import("mssql")).default;
 		this.pool = new sql.ConnectionPool(this.config);
 		this.connection = await this.pool.connect();
 	}

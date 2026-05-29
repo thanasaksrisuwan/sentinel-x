@@ -1,5 +1,3 @@
-import sqlite3 from "sqlite3";
-import { open } from "sqlite";
 import { DatabaseAdapter } from "./adapter.js";
 
 /**
@@ -7,6 +5,8 @@ import { DatabaseAdapter } from "./adapter.js";
  */
 export class SqliteAdapter extends DatabaseAdapter {
 	async connect() {
+		const sqlite3 = (await import("sqlite3")).default;
+		const { open } = await import("sqlite");
 		this.connection = await open({
 			filename: this.config.filename,
 			driver: sqlite3.Database
