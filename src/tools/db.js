@@ -20,7 +20,7 @@ export function definitions() {
 		{
 			name: "db_list_tables",
 			description: `Use this tool when the user asks for a general overview of the database or wants to see all available tables.
-Do not use this if you need column details (use db_schema_graph instead).
+Do not use this if you need column details (use db_describe_table instead).
 Input should be empty for the default database or a connection_name suffix for a configured DB_CONNECTION_* profile.
 Common phrases: "มีตารางอะไรบ้าง", "list tables", "ดู database overview".
 Returns a flat array of table names.`,
@@ -46,9 +46,41 @@ Returns a graph object with 'nodes' (tables and columns) and 'edges' (foreign ke
 			}
 		},
 		{
+			name: "db_describe_table",
+			description: `Use this tool when you need to understand the structure of a specific table, its columns, data types, and primary keys.
+This is much more token-efficient than db_schema_graph when you only need info about a single table.
+Input requires the table name, and an optional connection_name.
+Common phrases: "ดูโครงสร้างตาราง users", "describe table".
+Returns the table's column schema.`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					table: { type: "string", description: "The name of the table to describe" },
+					connection_name: { type: "string", description: "Optional: connection suffix" }
+				},
+				required: ["table"]
+			}
+		},
+		{
+			name: "db_find_usage",
+			description: `Use this tool to find where a specific database table or column is used in the codebase.
+This helps bridge the gap between Database Schema and Business Logic.
+Input should be the exact table or column name (e.g. 'users' or 'gcs_fk_contact_id').
+Common phrases: "คอลัมน์นี้ถูกใช้ที่ไหน", "find table usage", "who accesses this column".
+Returns a list of files and lines where the table/column is referenced in the code.`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					table_or_column: { type: "string", description: "Name of the table or column to search for" },
+					path: { type: "string", description: "Optional subdirectory to limit search (e.g. 'application/models')" }
+				},
+				required: ["table_or_column"]
+			}
+		},
+		{
 			name: "db_query",
 			description: `Use this tool when you need to answer a database question with a read-only SQL query after identifying the relevant tables.
-Do not use this tool for schema discovery (use db_schema_graph) or for any INSERT, UPDATE, DELETE, DDL, or migration work.
+Do not use this tool for schema discovery (use db_describe_table) or for any INSERT, UPDATE, DELETE, DDL, or migration work.
 Input should be a complete SELECT statement and optional connection_name suffix.
 Common phrases: "ขอ query", "เช็คข้อมูล", "ใครอนุมัติ", "อยู่ขั้นตอนไหน", "run SELECT".
 Returns result rows and row count.`,
@@ -72,19 +104,43 @@ export function handlers(deps) {
 	const getAdapter = async (connName = "") => {
 		const normalizedConnName = normalizeConnectionName(connName);
 		const suffix = normalizedConnName ? `_${normalizedConnName}` : "";
-		const cacheKey = `conn${suffix}`;
+		
+		// Extract current config from process.env
+		const config = {
+			driver: process.env[`DB_CONNECTION${suffix}`] || (normalizedConnName ? null : "sqlite"),
+			host: process.env[`DB_HOST${suffix}`],
+			port: process.env[`DB_PORT${suffix}`],
+			database: process.env[`DB_DATABASE${suffix}`],
+			username: process.env[`DB_USERNAME${suffix}`],
+			password: process.env[`DB_PASSWORD${suffix}`],
+			encrypt: process.env[`DB_ENCRYPT${suffix}`],
+			trustServer: process.env[`DB_TRUST_SERVER_CERTIFICATE${suffix}`]
+		};
+
+		if (!config.driver) {
+			throw new Error(`Database connection profile '${normalizedConnName}' is not defined in .env (Missing DB_CONNECTION${suffix})`);
+		}
+
+		// Create a config signature for caching
+		const signature = JSON.stringify(config);
+		const cacheKey = `${normalizedConnName || 'default'}:${signature}`;
 
 		if (deps.dbAdapters.has(cacheKey)) return deps.dbAdapters.get(cacheKey);
+		
+		// Clean up old connections for this profile name to prevent leaks
+		for (const key of deps.dbAdapters.keys()) {
+			if (key.startsWith(`${normalizedConnName || 'default'}:`)) {
+				const oldAdapter = deps.dbAdapters.get(key);
+				if (oldAdapter.close) await oldAdapter.close();
+				deps.dbAdapters.delete(key);
+			}
+		}
+
 		if (deps.dbAdapterPromises.has(cacheKey)) return await deps.dbAdapterPromises.get(cacheKey);
 		
 		const promise = (async () => {
-			const driver = process.env[`DB_CONNECTION${suffix}`] || (normalizedConnName ? null : "sqlite");
-			if (!driver) {
-				throw new Error(`Database connection profile '${normalizedConnName}' is not defined in .env (Missing DB_CONNECTION${suffix})`);
-			}
-		
-			if (driver === "sqlite") {
-				const dbFile = process.env[`DB_DATABASE${suffix}`] || "database.sqlite";
+			if (config.driver === "sqlite") {
+				const dbFile = config.database || "database.sqlite";
 				const sqlitePath = path.isAbsolute(dbFile) ? dbFile : path.join(deps.ROOT_DIR, dbFile);
 			
 				const { SqliteAdapter } = await import("../core/database/sqlite-adapter.js");
@@ -96,20 +152,20 @@ export function handlers(deps) {
 				} catch (e) {
 					throw new Error(`Failed to connect to SQLite at ${sqlitePath}: ${e.message}`);
 				}
-			} else if (driver === "mssql" || driver === "sqlsrv") {
-				const config = {
-					server: process.env[`DB_HOST${suffix}`] || "127.0.0.1",
-					port: parseInt(process.env[`DB_PORT${suffix}`] || "1433", 10),
-					database: process.env[`DB_DATABASE${suffix}`],
-					user: process.env[`DB_USERNAME${suffix}`],
-					password: process.env[`DB_PASSWORD${suffix}`],
+			} else if (config.driver === "mssql" || config.driver === "sqlsrv") {
+				const mssqlConfig = {
+					server: config.host || "127.0.0.1",
+					port: parseInt(config.port || "1433", 10),
+					database: config.database,
+					user: config.username,
+					password: config.password,
 					options: {
-						encrypt: process.env[`DB_ENCRYPT${suffix}`] === "true",
-						trustServerCertificate: process.env[`DB_TRUST_SERVER_CERTIFICATE${suffix}`] !== "false"
+						encrypt: config.encrypt === "true",
+						trustServerCertificate: config.trustServer !== "false"
 					}
 				};
 				const { MssqlAdapter } = await import("../core/database/mssql-adapter.js");
-				const adapter = new MssqlAdapter(config);
+				const adapter = new MssqlAdapter(mssqlConfig);
 				try {
 					await adapter.connect();
 					deps.dbAdapters.set(cacheKey, adapter);
@@ -117,8 +173,25 @@ export function handlers(deps) {
 				} catch (e) {
 					throw new Error(`Failed to connect to MSSQL [${normalizedConnName || 'default'}]: ${e.message}`);
 				}
+			} else if (config.driver === "mysql" || config.driver === "mysql2") {
+				const mysqlConfig = {
+					host: config.host || "127.0.0.1",
+					port: parseInt(config.port || "3306", 10),
+					database: config.database,
+					user: config.username,
+					password: config.password
+				};
+				const { MysqlAdapter } = await import("../core/database/mysql-adapter.js");
+				const adapter = new MysqlAdapter(mysqlConfig);
+				try {
+					await adapter.connect();
+					deps.dbAdapters.set(cacheKey, adapter);
+					return adapter;
+				} catch (e) {
+					throw new Error(`Failed to connect to MySQL [${normalizedConnName || 'default'}]: ${e.message}`);
+				}
 			} else {
-				throw new Error(`Database driver '${driver}' is not yet fully implemented in tools/db.js`);
+				throw new Error(`Database driver '${config.driver}' is not yet fully implemented in tools/db.js`);
 			}
 		})();
 
@@ -151,6 +224,30 @@ export function handlers(deps) {
 					inferred_count: inferred.length
 				}
 			};
+		},
+		db_describe_table: async ({ table, connection_name }) => {
+			const adapter = await getAdapter(connection_name);
+			try {
+				const columns = await adapter.describeTable(table);
+				return { table, columns };
+			} catch (e) {
+				return { error: e.message };
+			}
+		},
+		db_find_usage: async ({ table_or_column, path: subDir }) => {
+			try {
+				const searchPath = subDir || ".";
+				deps.policy.assertAllowed(searchPath, "read");
+
+				const { projectSearch } = await import("../core/surgical-io/file-ops.js");
+				
+				// Standardize pattern: word boundary to avoid partial matches like "users_id" when searching for "user"
+				const pattern = `\\b${table_or_column}\\b`;
+				
+				return await projectSearch(deps.ROOT_DIR, searchPath, pattern, deps.policy);
+			} catch (error) {
+				return { error: error.message };
+			}
 		},
 		db_query: async ({ sql, connection_name }) => {
 			const adapter = await getAdapter(connection_name);

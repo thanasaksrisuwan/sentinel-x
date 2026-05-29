@@ -70,18 +70,19 @@ Returns counts of indexed files, facts added, and any indexing errors.`,
 }
 
 export function handlers(deps) {
-	const store = new MemoryStore(deps);
-
 	return {
 		memory_remember: async (args) => {
+			const store = new MemoryStore(deps);
 			const fact = await store.addFact(args);
 			return { success: true, fact };
 		},
 		memory_list: async (args) => {
+			const store = new MemoryStore(deps);
 			const facts = await store.list(args);
 			return { facts, count: facts.length };
 		},
 		memory_recall: async ({ query, limit }) => {
+			const store = new MemoryStore(deps);
 			const allFacts = await store.list();
 			const { MemorySearch } = await import("../core/memory/search.js");
 			const searcher = new MemorySearch(allFacts);
@@ -89,6 +90,7 @@ export function handlers(deps) {
 			return { results, count: results.length };
 		},
 		memory_index_project: async () => {
+			const store = new MemoryStore(deps);
 			const { AutoIndexer } = await import("../core/memory/indexer.js");
 			const indexer = new AutoIndexer(deps, store);
 			const results = await indexer.indexProject();

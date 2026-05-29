@@ -2,27 +2,31 @@ import path from "path";
 
 /**
  * Sentinel-X Path Policy
- * Controls file access with dynamic allowlists and hard-coded blocks.
+ * Controls file access with adaptive discovery and hard-coded blocks.
  */
-
-const DISALLOWED_ROOTS = ["node_modules", ".git", "vendor", "system"];
-const DISALLOWED_FILES = [".env"];
 
 export class PathPolicy {
 	constructor(rootDir) {
 		this.rootDir = path.resolve(rootDir);
-		this.readAllowlist = new Set(["README.md", "package.json", "composer.json", "SENTINEL_X_ROADMAP.md"]);
-		this.writeAllowlist = new Set(["SENTINEL_X_ROADMAP.md", "storage"]);
+		
+		// Known system/hidden roots to block by default
+		this.blockedRoots = new Set([
+			"node_modules", ".git", ".github", ".vscode", ".idea", ".gemini",
+			"vendor", "system", "dist", "build", "out"
+		]);
+
+		this.blockedFiles = new Set([
+			".env", ".DS_Store", "thumbs.db", "package-lock.json", "composer.lock"
+		]);
+
+		// Parse manual overrides from environment (for special cases like allowing a hidden folder)
+		this.manualRead = new Set(this.parseEnvList(process.env.MCP_READ_ALLOWLIST));
+		this.manualWrite = new Set(this.parseEnvList(process.env.MCP_WRITE_ALLOWLIST));
 	}
 
-	/**
-	 * Add paths to allowlist
-	 * @param {string[]} paths 
-	 * @param {'read' | 'write'} type 
-	 */
-	addAllowlist(paths, type = 'read') {
-		const target = type === 'read' ? this.readAllowlist : this.writeAllowlist;
-		paths.forEach(p => target.add(this.normalizePath(p)));
+	parseEnvList(val) {
+		if (!val) return [];
+		return val.split(/[;,]/).map(s => this.normalizePath(s.trim())).filter(Boolean);
 	}
 
 	normalizePath(p) {
@@ -39,25 +43,54 @@ export class PathPolicy {
 	isAllowed(inputPath, operation = 'read') {
 		try {
 			const resolved = path.resolve(this.rootDir, inputPath);
-			const relative = path.relative(this.rootDir, resolved);
+			
+			// 1. Boundary Check: Ensure resolved path is inside rootDir
+			const isWindows = process.platform === 'win32';
+			const r = isWindows ? resolved.toLowerCase() : resolved;
+			const root = isWindows ? this.rootDir.toLowerCase() : this.rootDir;
 
-			// 1. Out of bounds check
-			if (relative.startsWith("..") || path.isAbsolute(relative)) return false;
+			// Path must be exactly root or start with root + separator
+			const sep = isWindows ? "\\" : "/";
+			const isInBounds = (r === root) || r.startsWith(root.endsWith(sep) ? root : root + sep);
+			
+			if (!isInBounds) return false;
+
+			// Get a clean relative path for segment checks
+			const relative = path.relative(this.rootDir, resolved);
+			if (relative === "" || relative === ".") return true; // Root itself is accessible
 
 			const normalized = this.normalizePath(relative);
 			const segments = normalized.split("/");
+			const rootSegment = segments[0];
 
-			// 2. Hard block check
-			if (DISALLOWED_ROOTS.includes(segments[0])) return false;
-			if (DISALLOWED_FILES.some(f => normalized.endsWith(f))) return false;
+			// 2. Manual Overrides (Highest priority)
+			const manual = operation === 'read' ? this.manualRead : this.manualWrite;
+			if (manual.has(normalized) || [...manual].some(m => normalized.startsWith(`${m}/`))) {
+				return true;
+			}
 
-			// 3. Allowlist check
-			const allowlist = operation === 'read' ? this.readAllowlist : this.writeAllowlist;
+			// 3. Hard Block Check
+			// Block if ANY segment of the path is a known system root (node_modules, .git, etc.)
+			if (segments.some(seg => this.blockedRoots.has(seg))) return false;
 			
-			// Allow if exactly in list or starts with an allowed directory
-			return [...allowlist].some(entry => 
-				normalized === entry || normalized.startsWith(`${entry}/`)
-			);
+			// Block specific files based on full normalized path or the filename itself
+			if (this.blockedFiles.has(normalized) || this.blockedFiles.has(segments[segments.length - 1])) {
+				return false;
+			}
+
+			// 4. Adaptive Discovery Logic
+			// Allow any file or directory that isn't hidden (doesn't start with .)
+			if (!rootSegment.startsWith(".")) {
+				return true;
+			}
+
+			// Special case: allow explicitly defined root manifest files even if they'd be filtered
+			const manifestFiles = ["package.json", "composer.json", "requirements.txt", "pyproject.toml", "go.mod"];
+			if (operation === 'read' && manifestFiles.includes(normalized)) {
+				return true;
+			}
+
+			return false;
 		} catch (e) {
 			return false;
 		}

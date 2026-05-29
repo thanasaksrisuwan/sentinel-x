@@ -26,10 +26,9 @@ Returns a risk level (low/medium/high) and recommended testing strategy.`,
 }
 
 export function handlers(deps) {
-	const verifier = new VerificationEngine(deps);
-
 	return {
 		verify_impact: async ({ path, symbol }) => {
+			const verifier = new VerificationEngine(deps);
 			return await verifier.analyzeImpact(path, symbol);
 		}
 	};

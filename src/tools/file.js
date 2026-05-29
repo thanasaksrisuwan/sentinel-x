@@ -56,18 +56,47 @@ Returns the write result and validation details. This tool performs a guarded wr
 				},
 				required: ["path", "content"]
 			}
+		},
+		{
+			name: "patch_code",
+			description: `Use this tool to safely modify a specific section of a file using exact search and replace.
+This is the preferred way to edit files via MCP (instead of write_file) because it prevents accidental deletion of unmodified code.
+Input should be a project-relative file path, the exact search string (including all whitespace/indentation), and the replacement string.
+Common phrases: "แก้โค้ดตรงนี้", "replace code", "patch file".
+Returns success status. If it fails due to exact match not found, you must check the file again and ensure your search string perfectly matches the file's text.`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					path: { type: "string", description: "Path to the file to modify" },
+					search: { type: "string", description: "The exact text block to replace" },
+					replace: { type: "string", description: "The new text block" }
+				},
+				required: ["path", "search", "replace"]
+			}
+		},
+		{
+			name: "search_project",
+			description: `Search for a pattern across the entire project or a specific subdirectory.
+Useful for finding usages of functions, classes, or variables across many files.
+Common phrases: "หาคำนี้ทั้งโปรเจกต์", "where is this used in the project".
+Returns a list of files and lines where the pattern was found.`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					pattern: { type: "string", description: "Regex pattern to search for" },
+					path: { type: "string", description: "Optional subdirectory to limit search (e.g. 'application/models')" }
+				},
+				required: ["pattern"]
+			}
 		}
 	];
 }
 
 export function handlers(deps) {
-	const { policy, ROOT_DIR } = deps;
-	const guard = new WriteGuard(deps);
-
 	return {
 		read_file: async ({ path: inputPath, start_line, end_line }) => {
 			try {
-				const resolvedPath = policy.assertAllowed(inputPath, "read");
+				const resolvedPath = deps.policy.assertAllowed(inputPath, "read");
 				const result = await surgicalRead(resolvedPath, start_line, end_line);
 				return result;
 			} catch (error) {
@@ -76,17 +105,47 @@ export function handlers(deps) {
 		},
 		search_text: async ({ path: inputPath, pattern, context }) => {
 			try {
-				const resolvedPath = policy.assertAllowed(inputPath, "read");
+				const resolvedPath = deps.policy.assertAllowed(inputPath, "read");
 				const { contextualSearch } = await import("../core/surgical-io/file-ops.js");
 				return await contextualSearch(resolvedPath, pattern, context);
 			} catch (error) {
 				return { error: error.message };
 			}
 		},
+		search_project: async ({ pattern, path: subDir }) => {
+			try {
+				const searchPath = subDir || ".";
+				deps.policy.assertAllowed(searchPath, "read");
+
+				const { projectSearch } = await import("../core/surgical-io/file-ops.js");
+				return await projectSearch(deps.ROOT_DIR, searchPath, pattern, deps.policy);
+			} catch (error) {
+				return { error: error.message };
+			}
+		},
 		write_file: async ({ path: inputPath, content }) => {
 			try {
-				const resolvedPath = policy.assertAllowed(inputPath, "write");
+				const guard = new WriteGuard(deps);
+				const resolvedPath = deps.policy.assertAllowed(inputPath, "write");
 				const result = await guard.atomicWrite(resolvedPath, content);
+				return result;
+			} catch (error) {
+				return { error: error.message };
+			}
+		},
+		patch_code: async ({ path: inputPath, search, replace }) => {
+			try {
+				const resolvedPath = deps.policy.assertAllowed(inputPath, "write");
+				const { patchFile } = await import("../core/surgical-io/file-ops.js");
+				
+				const patchResult = await patchFile(resolvedPath, search, replace);
+				if (!patchResult.success) {
+					return { error: patchResult.message };
+				}
+				
+				// Validate using WriteGuard to ensure syntax is not broken
+				const guard = new WriteGuard(deps);
+				const result = await guard.atomicWrite(resolvedPath, patchResult.newContent);
 				return result;
 			} catch (error) {
 				return { error: error.message };

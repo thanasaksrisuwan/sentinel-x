@@ -63,19 +63,20 @@ Returns the saved skill path and success status.`,
 }
 
 export function handlers(deps) {
-	const engine = new SkillEngine(deps);
-
 	return {
 		skill_list: async () => {
+			const engine = new SkillEngine(deps);
 			const skills = await engine.listSkills();
 			return { skills };
 		},
 		skill_execute: async ({ name, input }) => {
+			const engine = new SkillEngine(deps);
 			// toolRunner wrapper to use registry
 			const runner = (tool, args) => deps.registry.handle(tool, args, deps);
 			return await engine.execute(name, input, runner);
 		},
 		skill_save: async ({ name, description, steps }) => {
+			const engine = new SkillEngine(deps);
 			return await engine.saveSkill(name, description, steps);
 		}
 	};

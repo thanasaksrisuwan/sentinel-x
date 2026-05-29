@@ -23,11 +23,12 @@ export class AutoIndexer {
 		};
 
 		try {
-			// 1. Index Project Root Structure
-			const rootFiles = await fs.readdir(this.deps.ROOT_DIR);
-			
+			// 1. Index Project Structure Recursively (up to depth 3)
+			await this.walkDir(this.deps.ROOT_DIR, 0, results);
+
 			// 2. Identify and index manifests
-			const manifests = ["package.json", "composer.json", "go.mod", "requirements.txt", "pyproject.toml"];
+			const rootFiles = await fs.readdir(this.deps.ROOT_DIR);
+			const manifests = ["package.json", "composer.json", "go.mod", "requirements.txt", "pyproject.toml", "index.php"];
 			for (const m of manifests) {
 				if (rootFiles.includes(m)) {
 					const fact = await this.indexManifest(m);
@@ -35,35 +36,65 @@ export class AutoIndexer {
 				}
 			}
 
-			// 3. Identify project type based on stack (already detected)
+			// 3. Capture Stack Info
 			const stackFact = await this.store.addFact({
-				content: `This is a ${this.deps.stack.primary} project. Manifests found: ${this.deps.stack.manifests.join(", ")}`,
+				content: `Stack identified as ${this.deps.stack.primary}. Primary tags: ${this.deps.stack.tags.join(", ")}`,
 				domain: "architecture",
-				tags: ["stack", "info"],
+				tags: ["stack"],
 				scope: "project"
 			});
 			if (!stackFact.deduped) results.factsAdded++;
-
-			// 4. Quick Scan of main directories (Depth 1)
-			for (const file of rootFiles) {
-				const fullPath = path.join(this.deps.ROOT_DIR, file);
-				const stat = await fs.stat(fullPath);
-				
-				if (stat.isDirectory() && this.policy.isAllowed(file, "read")) {
-					const fact = await this.store.addFact({
-						content: `Project contains directory: ${file}/`,
-						domain: "structure",
-						tags: ["folder"],
-						scope: "project"
-					});
-					if (!fact.deduped) results.factsAdded++;
-				}
-			}
 
 			return results;
 		} catch (e) {
 			results.errors.push(e.message);
 			return results;
+		}
+	}
+
+	async walkDir(dir, depth, results) {
+		if (depth > 5) return; // Increased depth for real projects
+
+		let entries;
+		try {
+			entries = await fs.readdir(dir, { withFileTypes: true });
+		} catch (e) {
+			return; // Skip if directory cannot be read
+		}
+
+		for (const entry of entries) {
+			const fullPath = path.join(dir, entry.name);
+			const relative = path.relative(this.deps.ROOT_DIR, fullPath);
+			
+			// Always allow root itself, but check sub-paths
+			if (relative !== "" && !this.policy.isAllowed(relative, "read")) continue;
+
+			if (entry.isDirectory()) {
+				// Don't index deep internal directories like 'storage' or 'logs' if they're huge
+				if (["storage", "logs", "temp", "tmp"].includes(entry.name.toLowerCase())) continue;
+
+				const fact = await this.store.addFact({
+					content: `Directory found at depth ${depth}: ${relative}/`,
+					domain: "structure",
+					tags: ["folder", `depth-${depth}`],
+					scope: "project"
+				});
+				if (!fact.deduped) results.factsAdded++;
+				await this.walkDir(fullPath, depth + 1, results);
+			} else if (entry.isFile()) {
+				results.filesIndexed++;
+				const ext = path.extname(entry.name).toLowerCase();
+				// Index all relevant source/config files
+				if ([".php", ".js", ".py", ".go", ".ts", ".sql", ".md", ".json", ".env.example", ".htaccess"].includes(ext)) {
+					const fact = await this.store.addFact({
+						content: `Source/Config file: ${relative}`,
+						domain: "inventory",
+						tags: ["file", ext.slice(1)],
+						scope: "project"
+					});
+					if (!fact.deduped) results.factsAdded++;
+				}
+			}
 		}
 	}
 

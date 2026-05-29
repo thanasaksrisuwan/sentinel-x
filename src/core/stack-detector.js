@@ -19,18 +19,27 @@ export class StackDetector {
 
 		const files = await fs.readdir(this.rootDir);
 
-		// 1. PHP / Laravel detection
-		if (files.includes("composer.json")) {
+		// 1. PHP / Laravel / CodeIgniter detection
+		const isPhp = files.includes("composer.json") || files.includes("index.php");
+		if (isPhp) {
 			results.tags.add("php");
-			results.manifests.push("composer.json");
-			try {
-				const composer = JSON.parse(await fs.readFile(path.join(this.rootDir, "composer.json"), "utf-8"));
-				const deps = { ...composer.require, ...composer["require-dev"] };
-				if (deps["laravel/framework"]) {
-					results.primary = "laravel";
-					results.tags.add("laravel");
-				}
-			} catch (e) { /* ignore parse error */ }
+			if (files.includes("composer.json")) {
+				results.manifests.push("composer.json");
+				try {
+					const composer = JSON.parse(await fs.readFile(path.join(this.rootDir, "composer.json"), "utf-8"));
+					const deps = { ...composer.require, ...composer["require-dev"] };
+					if (deps["laravel/framework"]) {
+						results.primary = "laravel";
+						results.tags.add("laravel");
+					}
+				} catch (e) { /* ignore parse error */ }
+			}
+			
+			// CodeIgniter 3 check
+			if (results.primary === "generic" && files.includes("application") && files.includes("system")) {
+				results.primary = "codeigniter";
+				results.tags.add("ci3");
+			}
 		}
 
 		// 2. Node.js / React / Express detection

@@ -56,17 +56,32 @@ export class DatabaseAdapter {
 	}
 
 	/**
-	 * Safety check for read-only SQL.
+	 * Safety check for read-only SQL and row limit enforcement.
 	 */
 	isSafe(sql) {
 		if (typeof sql !== "string") return false;
 
 		const normalized = this.stripSqlComments(sql).trim();
 		if (!normalized) return false;
+		
+		// 1. Must be a SELECT statement
 		if (!/^SELECT\b/i.test(normalized)) return false;
 
+		// 2. Must not contain statement separators (e.g. ;)
 		const withoutTrailingSemicolon = normalized.replace(/;\s*$/, "");
-		return !this.hasStatementSeparator(withoutTrailingSemicolon);
+		if (this.hasStatementSeparator(withoutTrailingSemicolon)) return false;
+
+		// 3. Row Limit Guard: Prevent "SELECT * FROM giant_table" without limits
+		// Check if it has LIMIT (MySQL/SQLite/Postgres), TOP (MSSQL), or OFFSET (Standard)
+		const hasLimit = /\bLIMIT\b/i.test(withoutTrailingSemicolon);
+		const hasTop = /^SELECT\s+TOP\b/i.test(withoutTrailingSemicolon);
+		const hasOffset = /\bOFFSET\b/i.test(withoutTrailingSemicolon);
+
+		if (!hasLimit && !hasTop && !hasOffset) {
+			throw new Error("Row Limit Guard: Your SELECT query must include a LIMIT or TOP clause to prevent memory exhaustion.");
+		}
+
+		return true;
 	}
 
 	stripSqlComments(sql) {

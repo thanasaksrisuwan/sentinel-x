@@ -11,20 +11,28 @@ export class VerificationEngine {
 	 * Analyze blast radius of a change
 	 */
 	async analyzeImpact(filePath, symbol) {
-		const { contextualSearch } = await import("../surgical-io/file-ops.js");
+		const { projectSearch } = await import("../surgical-io/file-ops.js");
+		const { policy, ROOT_DIR } = this.deps;
 		
-		// 1. Search for usages of the symbol
-		const results = await contextualSearch(filePath, symbol, 1);
+		// 1. Search for usages across the entire project
+		const results = await projectSearch(ROOT_DIR, ".", symbol, policy);
 		
-		// 2. Mock impact analysis (logic: more usages = higher risk)
-		const risk = results.totalMatches > 10 ? "high" : (results.totalMatches > 2 ? "medium" : "low");
+		// 2. Filter out usages in the same file to find external dependencies
+		const externalUsages = results.results.filter(r => r.file !== filePath);
+		
+		// 3. Risk calculation
+		const risk = externalUsages.length > 10 ? "high" : (externalUsages.length > 0 ? "medium" : "low");
 		
 		return {
 			file: filePath,
 			symbol,
-			usagesFound: results.totalMatches,
+			totalUsages: results.totalMatches,
+			externalUsages: externalUsages.length,
+			affectedFiles: [...new Set(externalUsages.map(r => r.file))],
 			riskLevel: risk,
-			recommendation: risk === "high" ? "Run full integration tests" : "Unit tests should be sufficient"
+			recommendation: risk === "high" ? "Critical symbol. Perform full regression testing." : 
+						   (risk === "medium" ? "Impacts multiple files. Verify all call sites." : 
+						   "Local or low impact. Standard verification sufficient.")
 		};
 	}
 
